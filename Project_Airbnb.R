@@ -4,8 +4,10 @@
 #Import libraries
 #install.packages("tidyverse")
 #install.packages("jsonlite")
-library("tidyverse")
-library("jsonlite")
+#install.packages("caret)
+library(tidyverse)
+library(jsonlite)
+library(caret)
 
 #Import dataset
 df_raw <- read.csv("data/AirBnbMadrid.csv")
@@ -110,6 +112,7 @@ cols_boolean <- c("host_is_superhost","host_identity_verified", "has_availabilit
 df_clean <- df_clean %>%
   mutate(across(any_of(cols_boolean), ~ as.integer(. == "t")))
 
+
 #4. Bathrooms ("1 bath", "1.5 baths"...)
 df_clean <- df_clean %>%
   mutate(
@@ -161,10 +164,46 @@ df_clean <- df_clean %>%
   ) %>%
   select(-first_review, -last_review)
 
+#7. Convert strings into factor
+df_clean$neighbourhood_group_cleansed <- as.factor(df_clean$neighbourhood_group_cleansed)
+df_clean$room_type <- as.factor(df_clean$room_type)
+
 #TRAIN/TEST SPLITTING
+set.seed(123)
+index <- createDataPartition(df_clean$price, p = 0.80, times = 1, list = FALSE)
+
+train_data <- df_clean[index, ]
+test_data <- df_clean[-index, ]
+
+med_rating <- median(train_data$review_scores_rating, na.rm = TRUE)
+med_min_nights <- median(train_data$minimum_nights, na.rm = TRUE)
+med_max_nights <- median(train_data$maximum_nights, na.rm = TRUE)
+
+#NA's IMPUTATION
+impute_na <- function(data) {
+  data %>% mutate(
+      reviews_per_months = if_else(is.na(reviews_per_month), 0, reviews_per_month),
+      years_since_first_review = if_else(is.na(years_since_first_review), 0, years_since_first_review),
+      review_scores_rating = if_else(is.na(review_scores_rating), med_rating, review_scores_rating),
+      minimum_nights = if_else(is.na(minimum_nights), med_min_nights, minimum_nights),
+      maximum_nights = if_else(is.na(maximum_nights), med_max_nights, maximum_nights))
+}
+
+train_data <- impute_na(train_data)
+test_data <- impute_na(test_data)
+
+sum(is.na(train_data))
+sum(is.na(test_data))
 
 
+#LINEAR REGRESSION
 
+mod <- lm(price ~ ., data = train_data)
+summary(mod)
+
+# We can see the beta estimates for each variable and their corresponding p-values. Variables with very low p-values are statistically significant,
+# so we can reject the null hypothesis that beta = 0. Adding one extra guest(accommodates), keeping other variables constant, increases the price 
+# by €22.81, while being located in "Centro" increases the price by €38.59 compared to "Arganzuela", tha base modality.
 
 
 
