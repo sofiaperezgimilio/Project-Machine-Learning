@@ -182,7 +182,7 @@ med_max_nights <- median(train_data$maximum_nights, na.rm = TRUE)
 #NA's IMPUTATION
 impute_na <- function(data) {
   data %>% mutate(
-      reviews_per_months = if_else(is.na(reviews_per_month), 0, reviews_per_month),
+      reviews_per_month = if_else(is.na(reviews_per_month), 0, reviews_per_month),
       years_since_first_review = if_else(is.na(years_since_first_review), 0, years_since_first_review),
       review_scores_rating = if_else(is.na(review_scores_rating), med_rating, review_scores_rating),
       minimum_nights = if_else(is.na(minimum_nights), med_min_nights, minimum_nights),
@@ -195,18 +195,115 @@ test_data <- impute_na(test_data)
 sum(is.na(train_data))
 sum(is.na(test_data))
 
+# Replace NAs of 'bath_shared' and 'has_availability'
+train_data <- train_data %>%
+  mutate(
+    bath_shared = replace_na(bath_shared, 0L),
+    has_availability = replace_na(has_availability, 1L)
+  )
+
+test_data <- test_data %>%
+  mutate(
+    bath_shared = replace_na(bath_shared, 0L),
+    has_availability = replace_na(has_availability, 1L)
+  )
+
 
 #LINEAR REGRESSION
 
 mod <- lm(price ~ ., data = train_data)
 summary(mod)
 
+# Adjusted R-squared: the model explains 39.7% of variability for price
+# Residual standard error: the predictions deviate 106 euros from the real price
+# F-statistic and p-value: the model is very significant (much better than predicting only with the mean)
+
+
 # We can see the beta estimates for each variable and their corresponding p-values. Variables with very low p-values are statistically significant,
 # so we can reject the null hypothesis that beta = 0. Adding one extra guest(accommodates), keeping other variables constant, increases the price 
-# by €22.81, while being located in "Centro" increases the price by €38.59 compared to "Arganzuela", tha base modality.
+# by €22.81, while being located in "Centro" increases the price by €38.59 compared to "Arganzuela", the base modality.
 
 
+# Matrices X, Y and estimation of coefficients
+X <- model.matrix(price ~ ., data = train_data)
+Y <- train_data$price
+
+X_full <- model.matrix(mod)
+validated_cols <- names(which(!is.na(coef(mod)))) # Eliminates columns that are redundant
+X <- X_full[, validated_cols]
+Y <- model.response(model.frame(mod)) #Same num of rows as X
+
+N <- nrow(X) # Num of observations
+p <- ncol(X) # Num of parameters (K variables + 1 intercept)
+df <- N - p
+
+# Estimations (betas)
+b <- (solve(t(X) %*% X) %*% t(X)) %*% Y
+b
+
+# Predictions and residuals
+Y_hat <- X %*% b
+residuals <- Y - Y_hat
+
+# RSS and TSS
+RSS <- as.numeric(t(residuals) %*% residuals)
+TSS <- var(Y) * (N - 1)
+
+# R squared
+R2 <- 1-RSS/TSS
+
+# Error of the model
+sigma_sq <- RSS/df
+sigma <- sqrt(sigma_sq)
+sigma # Residual standard error
+
+# Error of the coefficients
+cov <- as.numeric(sigma_sq)*(solve(t(X) %*% X))
+sb <- sqrt(diag(cov))
+sb # Standard error of each
+
+# Hypothesis test
+t_values <- b / sb
+alpha <- 0.05
+t_crit <- qt(1 - alpha / 2, df = df)
+significatives <- abs(t_values) > t_crit # if true -> reject H0 and so Bj !=0
+# For example, having more accommodates, bedrooms, private bathrooms and number of amenities if significant. The higher is the price per night, but for example having a bathroom shared, the price reduces
+# The number of beds is not significant once it is established the num of accommodates ans bedrooms
+# Getting a private room or shared room is significant in the price, but a hotel room not (maybe because there are less observations in the dataset and  so the standard error is high)
+
+# The mayority of neighbourhoods comparing with the base (Arganzuela) are significant. Centro, Salamanca, Chamberí y Retiro are more expensive and Carabanchel, Usera, Puente de Vallecas, Villaverde, Vicálvaro, Latina cheaper.
+# Chamartín, Tetuán, Hortaleza o Barajas are not as significant, because their price not differ a lot from Arganzuela
+
+# Latitude and longitude (coordinates of the airbnbs) not significant because it is already in the info of the neighbourhood
+# host_is_superhost and host_identity_verified are not significant, because with the review_scores_rating it is sufficient for the price
 
 
+# Contrast with F-statistic (complete vs null models)
+mod_nulo <- lm(price ~ 1, data = train_data)
+RSS_0 <- sum(resid(mod_nulo)^2)
 
+F_global <- ((RSS_0 - RSS) / (p - 1)) / (RSS / df)
+F_global
+# Reject H0 -> so the complete model is better than the null one
+
+
+# Constraints
+
+# The num of bedrooms and num of beds influence on the price?
+# H_0: beta bedrooms = 0 and beta beds = 0
+# H_1: at least one of them is influential
+
+idx_bedrooms <- which(colnames(X) == "bedrooms")
+idx_beds <- which(colnames(X) == "beds")
+
+C <- matrix(0, nrow = 2, ncol = p)
+C[1, idx_bedrooms] <- 1
+C[2, idx_beds] <- 1
+gamma <- matrix(c(0, 0), nrow = 2, ncol = 1)
+
+increase_RSS <- t(gamma - C %*% b) %*% solve(C %*% solve(t(X) %*% X) %*% t(C)) %*% (gamma - C %*% b)
+F_restriction <- (as.numeric(increase_RSS) / nrow(C)) / (RSS / df)
+F_restriction 
+# Reject H0, so clearly the num of bedrooms and beds are really signifcant for the price of an airbnb. If they are eliminated, the RSS is much higher
+# In the t-test, bed alone was not significant, however considering beds with bedrooms, both of them, they are very significant
 
